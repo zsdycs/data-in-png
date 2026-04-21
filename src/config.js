@@ -15,7 +15,7 @@ module.exports = {
   CHUNK_SIZE_BYTES: 2 * 1024 * 1024,
 
   /** 前端自动下载节流：每批触发下载的文件数量 */
-  DOWNLOAD_BATCH_SIZE: 3,
+  DOWNLOAD_BATCH_SIZE: 10,
 
   /** 单次请求体最大大小（300 MB） */
   MAX_UPLOAD_BYTES: 300 * 1024 * 1024,

@@ -1,7 +1,7 @@
 'use strict';
 
 const { parentPort } = require('worker_threads');
-const { writePngRgba8 } = require('./png-codec');
+const { writePngGray8 } = require('./png-codec');
 const { buildStgmFrame, makeCarrierImage } = require('./stego');
 
 if (!parentPort) {
@@ -20,7 +20,7 @@ parentPort.on('message', (msg) => {
 
     const frame = buildStgmFrame(chunk, chunkIndex, totalChunks, mime, fileName);
     const carrier = makeCarrierImage(frame);
-    const png = writePngRgba8(carrier.width, carrier.height, carrier.rgba);
+    const png = writePngGray8(carrier.width, carrier.height, carrier.gray);
     const pngBytes = new Uint8Array(png.buffer, png.byteOffset, png.byteLength);
 
     parentPort.postMessage({

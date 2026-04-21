@@ -15,22 +15,22 @@ function makeChunk(type4, data) {
   return Buffer.concat([len, type, data, crc]);
 }
 
-function writePngRgba8(width, height, rgba) {
+function writePngGray8(width, height, gray) {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
     throw new Error('PNG 尺寸非法');
   }
-  if (rgba.length !== width * height * 4) {
-    throw new Error('RGBA 数据长度不匹配');
+  if (gray.length !== width * height) {
+    throw new Error('Gray8 数据长度不匹配');
   }
 
-  const scanlineSize = 1 + width * 4;
+  const scanlineSize = 1 + width;
   const raw = Buffer.alloc(scanlineSize * height);
 
   for (let y = 0; y < height; y++) {
     const rowRawOff = y * scanlineSize;
-    const rowRgbaOff = y * width * 4;
+    const rowGrayOff = y * width;
     raw[rowRawOff] = 0;
-    rgba.copy(raw, rowRawOff + 1, rowRgbaOff, rowRgbaOff + width * 4);
+    gray.copy(raw, rowRawOff + 1, rowGrayOff, rowGrayOff + width);
   }
 
   const compressed = zlib.deflateSync(raw, { level: 9 });
@@ -39,7 +39,7 @@ function writePngRgba8(width, height, rgba) {
   ihdr.writeUInt32BE(width >>> 0, 0);
   ihdr.writeUInt32BE(height >>> 0, 4);
   ihdr[8] = 8;
-  ihdr[9] = 6;
+  ihdr[9] = 0;
   ihdr[10] = 0;
   ihdr[11] = 0;
   ihdr[12] = 0;
@@ -62,7 +62,7 @@ function paethPredictor(a, b, c) {
   return c;
 }
 
-function readPngRgba8(pngBuf) {
+function readPngGray8(pngBuf) {
   if (!Buffer.isBuffer(pngBuf) || pngBuf.length < 8) {
     throw new Error('PNG 数据为空');
   }
@@ -100,7 +100,7 @@ function readPngRgba8(pngBuf) {
       const filter = data[11];
       const interlace = data[12];
 
-      if (bitDepth !== 8 || colorType !== 6) throw new Error('仅支持 RGBA8 PNG');
+      if (bitDepth !== 8 || colorType !== 0) throw new Error('仅支持 Gray8 PNG');
       if (compression !== 0 || filter !== 0 || interlace !== 0) throw new Error('仅支持标准无隔行 PNG');
       gotIHDR = true;
     } else if (type === 'IDAT') {
@@ -116,13 +116,13 @@ function readPngRgba8(pngBuf) {
   if (!idats.length) throw new Error('PNG 缺少 IDAT');
 
   const raw = zlib.inflateSync(Buffer.concat(idats));
-  const bpp = 4;
+  const bpp = 1;
   const rowBytes = width * bpp;
   const scanlineSize = 1 + rowBytes;
   const expected = scanlineSize * height;
   if (raw.length !== expected) throw new Error('PNG 解压后长度异常');
 
-  const rgba = Buffer.alloc(rowBytes * height);
+  const gray = Buffer.alloc(rowBytes * height);
   for (let y = 0; y < height; y++) {
     const rowIn = y * scanlineSize;
     const rowOut = y * rowBytes;
@@ -130,9 +130,9 @@ function readPngRgba8(pngBuf) {
 
     for (let x = 0; x < rowBytes; x++) {
       const cur = raw[rowIn + 1 + x];
-      const left = (x >= bpp) ? rgba[rowOut + x - bpp] : 0;
-      const up = (y > 0) ? rgba[rowOut - rowBytes + x] : 0;
-      const upLeft = (y > 0 && x >= bpp) ? rgba[rowOut - rowBytes + x - bpp] : 0;
+      const left = (x >= bpp) ? gray[rowOut + x - bpp] : 0;
+      const up = (y > 0) ? gray[rowOut - rowBytes + x] : 0;
+      const upLeft = (y > 0 && x >= bpp) ? gray[rowOut - rowBytes + x - bpp] : 0;
 
       let recon;
       if (filterType === 0) recon = cur;
@@ -142,14 +142,14 @@ function readPngRgba8(pngBuf) {
       else if (filterType === 4) recon = (cur + paethPredictor(left, up, upLeft)) & 0xFF;
       else throw new Error('不支持的 PNG 过滤器: ' + filterType);
 
-      rgba[rowOut + x] = recon;
+      gray[rowOut + x] = recon;
     }
   }
 
-  return { width, height, rgba };
+  return { width, height, gray };
 }
 
 module.exports = {
-  writePngRgba8,
-  readPngRgba8,
+  writePngGray8,
+  readPngGray8,
 };

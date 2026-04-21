@@ -6,38 +6,14 @@ const { safeFileName } = require('./common');
 const MAGIC_STEG = Buffer.from('STEG');
 const MAGIC_STGM = Buffer.from('STGM');
 
-function encodeBitsIntoPixels(rgba, frameBytes) {
-  const bits = frameBytes.length * 8;
-  const capacityBits = Math.floor(rgba.length / 4) * 3;
-  if (bits > capacityBits) throw new Error('像素容量不足');
-
-  for (let byteIdx = 0; byteIdx < frameBytes.length; byteIdx++) {
-    const byte = frameBytes[byteIdx];
-    for (let bit = 0; bit < 8; bit++) {
-      const b = (byte >>> (7 - bit)) & 1;
-      const totalBit = byteIdx * 8 + bit;
-      const pixelIdx = Math.floor(totalBit / 3);
-      const ch = totalBit % 3;
-      const i = pixelIdx * 4 + ch;
-      rgba[i] = (rgba[i] & 0xFE) | b;
-    }
-  }
+function encodeBytesIntoPixels(gray, frameBytes) {
+  if (frameBytes.length > gray.length) throw new Error('像素容量不足');
+  frameBytes.copy(gray, 0);
 }
 
-function readBytesFromPixels(rgba, totalPixels, startByte, count) {
-  const out = Buffer.alloc(count);
-  for (let bIdx = 0; bIdx < count; bIdx++) {
-    let val = 0;
-    for (let bit = 0; bit < 8; bit++) {
-      const totalBit = (startByte + bIdx) * 8 + bit;
-      const pixelIdx = Math.floor(totalBit / 3);
-      if (pixelIdx >= totalPixels) throw new Error('OVERFLOW');
-      const ch = totalBit % 3;
-      val = ((val << 1) | (rgba[pixelIdx * 4 + ch] & 1)) & 0xFF;
-    }
-    out[bIdx] = val;
-  }
-  return out;
+function readBytesFromPixels(gray, totalPixels, startByte, count) {
+  if (startByte < 0 || count < 0 || startByte + count > totalPixels) throw new Error('OVERFLOW');
+  return Buffer.from(gray.subarray(startByte, startByte + count));
 }
 
 function buildStegFrame(text) {
@@ -80,45 +56,45 @@ function buildStgmFrame(chunkBytes, chunkIndex, totalChunks, mime, fileName) {
   return frame;
 }
 
-function decodeFrameFromPixels(rgba, width, height) {
+function decodeFrameFromPixels(gray, width, height) {
   const totalPixels = width * height;
-  const magic = readBytesFromPixels(rgba, totalPixels, 0, 4);
+  const magic = readBytesFromPixels(gray, totalPixels, 0, 4);
 
   const isSTEG = magic.equals(MAGIC_STEG);
   const isSTGM = magic.equals(MAGIC_STGM);
   if (!isSTEG && !isSTGM) throw new Error('MAGIC_FAIL');
 
   if (isSTEG) {
-    const n = readBytesFromPixels(rgba, totalPixels, 4, 4).readUInt32BE(0);
-    if (Math.ceil((12 + n) * 8 / 3) > totalPixels) throw new Error('OVERFLOW');
-    const textBytes = readBytesFromPixels(rgba, totalPixels, 8, n);
-    const stored = readBytesFromPixels(rgba, totalPixels, 8 + n, 4).readUInt32BE(0);
+    const n = readBytesFromPixels(gray, totalPixels, 4, 4).readUInt32BE(0);
+    if (12 + n > totalPixels) throw new Error('OVERFLOW');
+    const textBytes = readBytesFromPixels(gray, totalPixels, 8, n);
+    const stored = readBytesFromPixels(gray, totalPixels, 8 + n, 4).readUInt32BE(0);
     if ((stored >>> 0) !== (crc32(textBytes) >>> 0)) throw new Error('CRC_FAIL');
     return { format: 'STEG', text: textBytes.toString('utf8') };
   }
 
-  const hdr = readBytesFromPixels(rgba, totalPixels, 4, 9);
+  const hdr = readBytesFromPixels(gray, totalPixels, 4, 9);
   const flags = hdr[0];
   const chunkIndex = hdr.readUInt16BE(1);
   const totalChunks = hdr.readUInt16BE(3);
   const chunkCRC = hdr.readUInt32BE(5);
 
-  const mimeLen = readBytesFromPixels(rgba, totalPixels, 13, 1)[0];
-  const mimeBuf = readBytesFromPixels(rgba, totalPixels, 14, mimeLen);
+  const mimeLen = readBytesFromPixels(gray, totalPixels, 13, 1)[0];
+  const mimeBuf = readBytesFromPixels(gray, totalPixels, 14, mimeLen);
   const mime = mimeBuf.toString('utf8');
 
-  const nameLen = readBytesFromPixels(rgba, totalPixels, 14 + mimeLen, 2).readUInt16BE(0);
-  const nameBuf = readBytesFromPixels(rgba, totalPixels, 16 + mimeLen, nameLen);
+  const nameLen = readBytesFromPixels(gray, totalPixels, 14 + mimeLen, 2).readUInt16BE(0);
+  const nameBuf = readBytesFromPixels(gray, totalPixels, 16 + mimeLen, nameLen);
   const fileName = nameBuf.toString('utf8');
 
-  const dataLen = readBytesFromPixels(rgba, totalPixels, 16 + mimeLen + nameLen, 4).readUInt32BE(0);
+  const dataLen = readBytesFromPixels(gray, totalPixels, 16 + mimeLen + nameLen, 4).readUInt32BE(0);
   const dataStart = 20 + mimeLen + nameLen;
-  if (Math.ceil((dataStart + dataLen + 4) * 8 / 3) > totalPixels) throw new Error('OVERFLOW');
+  if (dataStart + dataLen + 4 > totalPixels) throw new Error('OVERFLOW');
 
-  const data = readBytesFromPixels(rgba, totalPixels, dataStart, dataLen);
+  const data = readBytesFromPixels(gray, totalPixels, dataStart, dataLen);
   if ((chunkCRC >>> 0) !== (crc32(data) >>> 0)) throw new Error('CHUNK_CRC_FAIL');
 
-  const storedFrameCRC = readBytesFromPixels(rgba, totalPixels, dataStart + dataLen, 4).readUInt32BE(0);
+  const storedFrameCRC = readBytesFromPixels(gray, totalPixels, dataStart + dataLen, 4).readUInt32BE(0);
   const frameNoCRC = Buffer.alloc(dataStart + dataLen);
   MAGIC_STGM.copy(frameNoCRC, 0);
   frameNoCRC[4] = flags;
@@ -137,20 +113,12 @@ function decodeFrameFromPixels(rgba, width, height) {
 }
 
 function makeCarrierImage(frameBytes) {
-  const bits = frameBytes.length * 8;
-  const pixelsNeeded = Math.ceil((bits / 3) * 1.1);
-  const side = Math.max(200, Math.ceil(Math.sqrt(pixelsNeeded)) + 10);
+  const pixelsNeeded = Math.max(1, frameBytes.length);
+  const side = Math.ceil(Math.sqrt(pixelsNeeded));
 
-  const rgba = Buffer.alloc(side * side * 4);
-  for (let i = 0; i < rgba.length; i += 4) {
-    rgba[i] = Math.floor(Math.random() * 256);
-    rgba[i + 1] = Math.floor(Math.random() * 256);
-    rgba[i + 2] = Math.floor(Math.random() * 256);
-    rgba[i + 3] = 255;
-  }
-
-  encodeBitsIntoPixels(rgba, frameBytes);
-  return { width: side, height: side, rgba };
+  const gray = Buffer.alloc(side * side);
+  encodeBytesIntoPixels(gray, frameBytes);
+  return { width: side, height: side, gray };
 }
 
 module.exports = {

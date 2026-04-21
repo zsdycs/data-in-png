@@ -10,7 +10,7 @@ const { Worker } = require('worker_threads');
 const { loadConfig } = require('./lib/config-loader');
 const { sendJson, sendText, parseReqUrl, readBody } = require('./lib/http-utils');
 const { safeFileName, ensureSafePath, makeJobId } = require('./lib/common');
-const { writePngRgba8, readPngRgba8 } = require('./lib/png-codec');
+const { writePngGray8, readPngGray8 } = require('./lib/png-codec');
 const { buildStegFrame, buildStgmFrame, decodeFrameFromPixels, makeCarrierImage } = require('./lib/stego');
 
 const ROOT_DIR = __dirname;
@@ -272,7 +272,7 @@ async function handleEncodeText(req, res) {
 
   const frame = buildStegFrame(text);
   const carrier = makeCarrierImage(frame);
-  const png = writePngRgba8(carrier.width, carrier.height, carrier.rgba);
+  const png = writePngGray8(carrier.width, carrier.height, carrier.gray);
 
   const job = createJobDir();
   const preview = Array.from(text).slice(0, CONFIG.PREVIEW_CHARS).join('');
@@ -354,14 +354,14 @@ async function handleDecodeImage(req, res) {
 
   let png;
   try {
-    png = readPngRgba8(body);
+    png = readPngGray8(body);
   } catch (err) {
     sendJson(res, 400, { error: 'PNG 解析失败', detail: err.message });
     return;
   }
 
   try {
-    const decoded = decodeFrameFromPixels(png.rgba, png.width, png.height);
+    const decoded = decodeFrameFromPixels(png.gray, png.width, png.height);
     if (decoded.format === 'STEG') {
       sendJson(res, 200, { ok: true, format: 'STEG', text: decoded.text });
       return;
