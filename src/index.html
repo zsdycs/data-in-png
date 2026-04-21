@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>图片转换</title>
+  <style>
+    :root {
+      --primary:      #4f6bed;
+      --primary-h:    #3d58d8;
+      --bg:           #f1f5f9;
+      --card:         #ffffff;
+      --border:       #e2e8f0;
+      --text:         #1e293b;
+      --muted:        #94a3b8;
+      --s-bg:  #ecfdf5; --s-t: #065f46;
+      --e-bg:  #fff1f2; --e-t: #9f1239;
+      --i-bg:  #eff6ff; --i-t: #1e40af;
+    }
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                   'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+      color: var(--text);
+      min-height: 100vh;
+      padding: 36px 16px;
+    }
+    .wrap { max-width: 580px; margin: 0 auto; }
+
+    /* ── header ── */
+    .hd { text-align: center; margin-bottom: 28px; }
+    .hd h1 { font-size: 22px; font-weight: 700; color: var(--primary); letter-spacing: .4px; }
+    .hd p  { margin-top: 6px; font-size: 13px; color: var(--muted); }
+
+    /* ── card ── */
+    .card {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 6px 20px rgba(0,0,0,.07);
+    }
+
+    /* ── textarea ── */
+    textarea {
+      width: 100%; height: 150px;
+      padding: 12px 14px;
+      border: 1.5px solid var(--border); border-radius: 10px;
+      font-size: 14px; line-height: 1.65; font-family: inherit;
+      color: var(--text); resize: vertical; outline: none;
+      transition: border-color .2s;
+    }
+    textarea:focus { border-color: var(--primary); }
+
+    /* ── actions ── */
+    .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    .btn {
+      padding: 9px 20px;
+      border: none; border-radius: 8px;
+      font-size: 13.5px; font-weight: 600; cursor: pointer;
+      font-family: inherit;
+      transition: background .16s, opacity .16s, transform .08s;
+      white-space: nowrap; user-select: none;
+    }
+    .btn:active:not(:disabled) { transform: scale(.96); }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-h); }
+    .btn-outline {
+      background: #f8fafc; color: var(--text);
+      border: 1.5px solid var(--border);
+    }
+    .btn-outline:hover:not(:disabled) { background: var(--border); }
+    .btn:disabled { opacity: .42; cursor: not-allowed; }
+
+    /* file label mimics .btn-outline */
+    .upload-lbl {
+      display: inline-block;
+      padding: 9px 20px;
+      border-radius: 8px;
+      font-size: 13.5px; font-weight: 600; cursor: pointer;
+      font-family: inherit;
+      background: #f8fafc; color: var(--text);
+      border: 1.5px solid var(--border);
+      transition: background .16s;
+      white-space: nowrap; user-select: none;
+    }
+    .upload-lbl:hover { background: var(--border); }
+    .upload-lbl:active { transform: scale(.96); }
+
+    /* ── message area ── */
+    #msg {
+      display: none;
+      margin-top: 12px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px; line-height: 1.55;
+    }
+    #msg.success { display:block; background:var(--s-bg); color:var(--s-t); }
+    #msg.error   { display:block; background:var(--e-bg); color:var(--e-t); }
+    #msg.info    { display:block; background:var(--i-bg); color:var(--i-t); }
+
+    /* ── preview ── */
+    .prev-wrap { display: none; margin-top: 20px; }
+    .prev-wrap.show { display: block; }
+    .prev-lbl {
+      font-size: 11.5px; font-weight: 600;
+      color: var(--muted); text-transform: uppercase;
+      letter-spacing: .8px; margin-bottom: 8px;
+    }
+    #prev-img {
+      display: block; max-width: 100%;
+      border-radius: 10px; border: 1.5px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hd">
+    <!-- <h1>图片隐写术</h1> -->
+    <!-- <p>利用 LSB 像素隐写，将文本秘密编入 PNG 图片，或从图片中还原文本</p> -->
+  </div>
+
+  <div class="card">
+    <textarea id="txt" placeholder="在此输入文本内容…"></textarea>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="btn-gen">生成</button>
+      <label class="upload-lbl">
+        上传图片
+        <input type="file" id="file-inp" accept="image/png" style="display:none" />
+      </label>
+      <label class="upload-lbl">
+        上传文件
+        <input type="file" id="file-b64-inp" style="display:none" />
+      </label>
+    </div>
+
+    <div id="msg"></div>
+
+    <div class="prev-wrap" id="prev-wrap">
+      <div class="prev-lbl">图片预览</div>
+      <img id="prev-img" alt="预览图" />
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* 图片水印和文件名所用的字符数，修改此值即可全局生效 */
+const PREVIEW_CHARS = 20;
+
+/* ═══════════════════════════════════════
+   CRC32 (IEEE 802.3, standard implementation)
+═══════════════════════════════════════ */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++)
+    crc = CRC_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+/* ═══════════════════════════════════════
+   Frame format (all big-endian):
+     [0..3]     MAGIC  = 0x53 0x54 0x45 0x47  ("STEG")
+     [4..7]     LENGTH = uint32, UTF-8 byte count of text
+     [8..8+N-1] DATA   = UTF-8 encoded text
+     [8+N..11+N] CRC32 = uint32, crc32(DATA)
+
+   Encoding: each bit of the frame is stored in the
+   LSB of R/G/B channels (3 bits per pixel, MSB first).
+   Alpha channel is always kept at 255.
+═══════════════════════════════════════ */
+
+/**
+ * Encode text into a canvas with hidden steganographic data.
+ * Also renders the first 6 characters visibly on the image.
+ * @param {string} text
+ * @param {string} [label]  Text shown on the image. Defaults to first PREVIEW_CHARS chars of text.
+ * @returns {HTMLCanvasElement}
+ */
+function encodeTextToCanvas(text, label) {
+  const enc   = new TextEncoder();
+  const tBytes = enc.encode(text);
+  const N     = tBytes.length;
+
+  /* Build frame */
+  const frame = new Uint8Array(12 + N);
+  frame[0] = 0x53; frame[1] = 0x54; frame[2] = 0x45; frame[3] = 0x47; // "STEG"
+  frame[4] = (N >>> 24) & 0xFF;
+  frame[5] = (N >>> 16) & 0xFF;
+  frame[6] = (N >>>  8) & 0xFF;
+  frame[7] =  N         & 0xFF;
+  frame.set(tBytes, 8);
+  const chk = crc32(tBytes);
+  frame[8 + N]     = (chk >>> 24) & 0xFF;
+  frame[8 + N + 1] = (chk >>> 16) & 0xFF;
+  frame[8 + N + 2] = (chk >>>  8) & 0xFF;
+  frame[8 + N + 3] =  chk         & 0xFF;
+
+  /* Calculate canvas size — add 10% headroom */
+  const pixelsNeeded = Math.ceil(frame.length * 8 / 3 * 1.1);
+  const side         = Math.max(200, Math.ceil(Math.sqrt(pixelsNeeded)) + 10);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = side;
+  const ctx = canvas.getContext('2d');
+
+  /* 1. Fill background with random noise (natural look) */
+  const imgData = ctx.createImageData(side, side);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i]   = Math.random() * 256 | 0;
+    d[i+1] = Math.random() * 256 | 0;
+    d[i+2] = Math.random() * 256 | 0;
+    d[i+3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  /* 2. Draw visible preview text (first PREVIEW_CHARS Unicode chars) */
+  const preview  = label != null ? label : [...text].slice(0, PREVIEW_CHARS).join('');
+  const fontSize = Math.max(20, Math.floor(side / 7));
+  ctx.font         = `bold ${fontSize}px 'PingFang SC','Microsoft YaHei',sans-serif`;
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth    = Math.max(4, Math.ceil(fontSize / 5));
+  ctx.strokeStyle  = 'rgba(0,0,0,0.72)';
+  ctx.strokeText(preview, side / 2, side / 2);
+  ctx.fillStyle    = 'rgba(255,255,255,0.92)';
+  ctx.fillText(preview, side / 2, side / 2);
+
+  /* 3. Encode frame bits into LSBs (R/G/B, MSB-first per byte) */
+  const final = ctx.getImageData(0, 0, side, side);
+  const fd    = final.data;
+  for (let byteIdx = 0; byteIdx < frame.length; byteIdx++) {
+    const byte = frame[byteIdx];
+    for (let bit = 0; bit < 8; bit++) {
+      const b         = (byte >>> (7 - bit)) & 1;
+      const totalBit  = byteIdx * 8 + bit;
+      const pixelIdx  = Math.floor(totalBit / 3);
+      const ch        = totalBit % 3;              // 0=R 1=G 2=B
+      fd[pixelIdx * 4 + ch] = (fd[pixelIdx * 4 + ch] & 0xFE) | b;
+    }
+  }
+  ctx.putImageData(final, 0, 0);
+
+  return canvas;
+}
+
+/**
+ * Decode hidden text from ImageData.
+ * @param {ImageData} imageData
+ * @returns {string}
+ * @throws {Error} with .message in 'MAGIC_FAIL' | 'OVERFLOW' | 'CRC_FAIL'
+ */
+function decodeFromImageData(imageData) {
+  const d     = imageData.data;
+  const total = imageData.width * imageData.height;
+
+  /** Read `count` bytes starting from byte offset `startByte` in the bit stream */
+  function readBytes(startByte, count) {
+    const result = new Uint8Array(count);
+    for (let bIdx = 0; bIdx < count; bIdx++) {
+      let byte = 0;
+      for (let bit = 0; bit < 8; bit++) {
+        const totalBit = (startByte + bIdx) * 8 + bit;
+        const pIdx     = Math.floor(totalBit / 3);
+        if (pIdx >= total) throw new Error('OVERFLOW');
+        const ch = totalBit % 3;
+        byte = (byte << 1) | (d[pIdx * 4 + ch] & 1);
+      }
+      result[bIdx] = byte;
+    }
+    return result;
+  }
+
+  /* Verify MAGIC */
+  const magic = readBytes(0, 4);
+  if (magic[0] !== 0x53 || magic[1] !== 0x54 || magic[2] !== 0x45 || magic[3] !== 0x47)
+    throw new Error('MAGIC_FAIL');
+
+  /* Read LENGTH */
+  const lenB = readBytes(4, 4);
+  const N = ((lenB[0] << 24) | (lenB[1] << 16) | (lenB[2] << 8) | lenB[3]) >>> 0;
+
+  /* Overflow guard */
+  if (Math.ceil((12 + N) * 8 / 3) > total)
+    throw new Error('OVERFLOW');
+
+  /* Read DATA */
+  const textBytes = readBytes(8, N);
+
+  /* Read & verify CRC32 */
+  const crcB      = readBytes(8 + N, 4);
+  const storedCRC = ((crcB[0] << 24) | (crcB[1] << 16) | (crcB[2] << 8) | crcB[3]) >>> 0;
+  if (crc32(textBytes) !== storedCRC)
+    throw new Error('CRC_FAIL');
+
+  return new TextDecoder().decode(textBytes);
+}
+
+/* ═══════════════════════════════════════
+   UI
+═══════════════════════════════════════ */
+const txtEl    = document.getElementById('txt');
+const btnGen   = document.getElementById('btn-gen');
+const fileInp  = document.getElementById('file-inp');
+const msgEl    = document.getElementById('msg');
+const prevWrap = document.getElementById('prev-wrap');
+const prevImg  = document.getElementById('prev-img');
+
+const fileB64Inp = document.getElementById('file-b64-inp');
+
+let pendingFileName = null;  // file name from 上传文件, used as image label & download name
+
+function showMsg(text, type) {
+  msgEl.textContent = text;
+  msgEl.className   = type; // 'success' | 'error' | 'info'
+}
+
+/* ── Generate ── */
+btnGen.addEventListener('click', () => {
+  const text = txtEl.value.trim();
+  if (!text) {
+    showMsg('请先输入文本内容', 'error');
+    txtEl.focus();
+    return;
+  }
+
+  btnGen.disabled    = true;
+  btnGen.textContent = '处理中…';
+  showMsg('正在生成，请稍候…', 'info');
+
+  /* Defer heavy work so the browser can repaint first */
+  setTimeout(() => {
+    try {
+      const label    = pendingFileName != null ? pendingFileName : null;
+      const canvas   = encodeTextToCanvas(text, label);
+      const dataURL  = canvas.toDataURL('image/png');
+
+      /* Trigger download */
+      const baseName = pendingFileName != null
+        ? pendingFileName.replace(/\.[^.]+$/, '')   // strip original extension (e.g. .pdf)
+        : [...text].slice(0, PREVIEW_CHARS).join('');
+      const fileName = baseName + '.png';
+      const a = document.createElement('a');
+      a.href     = dataURL;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      /* Show preview */
+      prevImg.src = dataURL;
+      prevWrap.classList.add('show');
+
+      const charCount = [...text].length;
+      showMsg(
+        `生成成功！图片尺寸 ${canvas.width}×${canvas.height} px，` +
+        `共 ${charCount} 个字符，图片已自动下载`,
+        'success'
+      );
+    } catch (e) {
+      showMsg('生成失败：' + e.message, 'error');
+    } finally {
+      pendingFileName    = null;
+      btnGen.disabled    = false;
+      btnGen.textContent = '生成';
+    }
+  }, 16);
+});
+
+/* ── Upload ── */
+fileInp.addEventListener('change', () => {
+  const file = fileInp.files[0];
+  if (!file) return;
+
+  if (file.type && file.type !== 'image/png') {
+    showMsg(
+      '请上传 PNG 格式的图片。其他格式（如 JPEG）会因有损压缩破坏隐写数据，导致识别失败',
+      'error'
+    );
+    fileInp.value = '';
+    return;
+  }
+
+  const imgFileName = file.name;   // keep for decoded-file naming
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img    = new Image();
+    img.onload   = () => {
+      const cv  = document.createElement('canvas');
+      cv.width  = img.width;
+      cv.height = img.height;
+      const ctx = cv.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const imgData = ctx.getImageData(0, 0, img.width, img.height);
+
+      prevImg.src = e.target.result;
+      prevWrap.classList.add('show');
+      showMsg(`正在识别图片（${img.width}×${img.height} px）…`, 'info');
+
+      setTimeout(() => {
+        try {
+          const text = decodeFromImageData(imgData);
+          if (text.startsWith('data:')) {
+            // Decoded content is a base64 data URL — trigger file download directly
+            const mimeMatch = text.match(/^data:([^;]+);base64,/);
+            const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+            const MIME_EXT = {
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':       'xlsx',
+              'application/vnd.ms-excel':                                                'xls',
+              'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+              'application/msword':                                                      'doc',
+              'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+              'application/vnd.ms-powerpoint':                                           'ppt',
+              'application/pdf':                                                         'pdf',
+              'application/zip':                                                         'zip',
+              'application/x-zip-compressed':                                            'zip',
+              'application/json':                                                        'json',
+              'text/plain':                                                              'txt',
+              'text/csv':                                                                'csv',
+              'text/html':                                                               'html',
+              'image/png':                                                               'png',
+              'image/jpeg':                                                              'jpg',
+              'image/gif':                                                               'gif',
+              'image/webp':                                                              'webp',
+            };
+            const ext = MIME_EXT[mime] ?? (mime.includes('/') ? mime.split('/')[1].split('+')[0] : 'bin');
+            const decodedName = imgFileName.replace(/\.[^.]+$/, '') + '.' + ext;
+            const a = document.createElement('a');
+            a.href     = text;
+            a.download = decodedName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            txtEl.value = '';
+            showMsg(`识别成功！检测到 Base64 编码文件（${mime}），已自动下载`, 'success');
+          } else {
+            txtEl.value = text;
+            showMsg(`识别成功！共还原 ${[...text].length} 个字符`, 'success');
+          }
+        } catch (err) {
+          const msgs = {
+            MAGIC_FAIL: '识别失败：图片中未检测到隐写标记（MAGIC 校验未通过），请确认上传的是由本工具生成的 PNG 图片',
+            CRC_FAIL:   '识别失败：数据完整性校验失败（CRC32 不匹配），图片在传输或保存过程中可能已被修改',
+            OVERFLOW:   '识别失败：图片像素数量不足以容纳声明的数据量，图片可能已被裁剪或压缩',
+          };
+          showMsg(msgs[err.message] || ('识别失败：' + err.message), 'error');
+        }
+        fileInp.value = '';
+      }, 16);
+    };
+    img.onerror = () => showMsg('图片加载失败，请检查文件是否损坏', 'error');
+    img.src     = e.target.result;
+  };
+  reader.onerror = () => showMsg('文件读取失败', 'error');
+  reader.readAsDataURL(file);
+});
+
+/* ── Upload file → base64 → textarea ── */
+fileB64Inp.addEventListener('change', () => {
+  const file = fileB64Inp.files[0];
+  if (!file) return;
+
+  showMsg(`正在读取文件「${file.name}」，请稍候…`, 'info');
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    const b64 = e.target.result; // data:<mime>;base64,<data>
+    txtEl.value     = b64;
+    pendingFileName = file.name;
+    const kb = (file.size / 1024).toFixed(1);
+    showMsg(
+      `文件「${file.name}」（${kb} KB）已转换为 Base64 文本并填入输入框，点击「生成」可将其嵌入到图片中`,
+      'success'
+    );
+    fileB64Inp.value = '';
+  };
+  reader.onerror = () => showMsg('文件读取失败，请重试', 'error');
+  reader.readAsDataURL(file);
+});
+
+</script>
+</body>
+</html>
