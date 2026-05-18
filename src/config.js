@@ -12,7 +12,7 @@ module.exports = {
   PREVIEW_CHARS: 20,
 
   /** 文件分片阈值：超过该值自动分片（2 MB） */
-  CHUNK_SIZE_BYTES: 2 * 1024 * 1024,
+  CHUNK_SIZE_BYTES: 19 * 1024 * 1024,
 
   /** 前端自动下载节流：每批触发下载的文件数量 */
   DOWNLOAD_BATCH_SIZE: 0,
