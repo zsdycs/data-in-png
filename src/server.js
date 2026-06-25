@@ -15,7 +15,7 @@ const { buildStegFrame, buildStgmFrame, decodeFrameFromPixels, makeCarrierImage 
 
 const ROOT_DIR = __dirname;
 const HTML_PATH = path.join(ROOT_DIR, 'index.html');
-const JOBS_ROOT = path.join(ROOT_DIR, '.jobs');
+const DEFAULT_JOBS_ROOT = path.join(ROOT_DIR, '.jobs');
 const ENCODE_WORKER_PATH = path.join(ROOT_DIR, 'lib', 'encode-chunk-worker.js');
 
 const progressStreams = new Map();
@@ -29,11 +29,9 @@ try {
   process.exit(1);
 }
 
-fs.mkdirSync(JOBS_ROOT, { recursive: true });
-
-function createJobDir() {
+function createJobDir(jobsRoot) {
   const jobId = makeJobId();
-  const dir = path.join(JOBS_ROOT, jobId);
+  const dir = path.join(jobsRoot, jobId);
   fs.mkdirSync(dir, { recursive: true });
   return { jobId, dir };
 }
@@ -200,6 +198,18 @@ function writeProgress(taskId, payload) {
   }
 }
 
+function openUrlInBrowser(url) {
+  const cmds = {
+    win32: `start "" "${url}"`,
+    darwin: `open "${url}"`,
+    linux: `xdg-open "${url}"`,
+  };
+  const cmd = cmds[process.platform] || cmds.linux;
+  exec(cmd, (err) => {
+    if (err) console.log('请手动在浏览器中打开：' + url);
+  });
+}
+
 function openProgressStream(taskId, res) {
   if (!isValidTaskId(taskId)) {
     sendJson(res, 400, { error: 'taskId 非法' });
@@ -254,7 +264,7 @@ function serveIndex(res) {
   });
 }
 
-async function handleEncodeText(req, res) {
+async function handleEncodeText(req, res, jobsRoot) {
   const body = await readBody(req, CONFIG.MAX_UPLOAD_BYTES);
   let obj;
   try {
@@ -274,7 +284,7 @@ async function handleEncodeText(req, res) {
   const carrier = makeCarrierImage(frame);
   const png = writePngGray8(carrier.width, carrier.height, carrier.gray);
 
-  const job = createJobDir();
+  const job = createJobDir(jobsRoot);
   const preview = Array.from(text).slice(0, CONFIG.PREVIEW_CHARS).join('');
   const outName = safeFileName(preview || 'text') + '.png';
   fs.writeFileSync(path.join(job.dir, outName), png);
@@ -292,7 +302,7 @@ async function handleEncodeText(req, res) {
   });
 }
 
-async function handleEncodeFile(req, res) {
+async function handleEncodeFile(req, res, jobsRoot) {
   const taskIdHeader = req.headers['x-task-id'];
   const taskId = isValidTaskId(taskIdHeader) ? taskIdHeader : null;
 
@@ -324,7 +334,7 @@ async function handleEncodeFile(req, res) {
 
   const chunkSize = CONFIG.CHUNK_SIZE_BYTES;
   const totalChunks = Math.max(1, Math.ceil(body.length / chunkSize));
-  const job = createJobDir();
+  const job = createJobDir(jobsRoot);
   writeProgress(taskId, {
     stage: 'process',
     current: 0,
@@ -382,7 +392,7 @@ async function handleDecodeImage(req, res) {
   }
 }
 
-function handleDownload(res, pathname) {
+function handleDownload(res, pathname, jobsRoot) {
   const m = pathname.match(/^\/api\/download\/([^/]+)\/([^/]+)$/);
   if (!m) {
     sendJson(res, 404, { error: 'Not Found' });
@@ -396,8 +406,8 @@ function handleDownload(res, pathname) {
     return;
   }
 
-  const abs = path.join(JOBS_ROOT, jobId, safeName);
-  if (!ensureSafePath(JOBS_ROOT, abs)) {
+  const abs = path.join(jobsRoot, jobId, safeName);
+  if (!ensureSafePath(jobsRoot, abs)) {
     sendJson(res, 400, { error: '路径非法' });
     return;
   }
@@ -416,105 +426,120 @@ function handleDownload(res, pathname) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
-  const method = req.method || 'GET';
-  const pathname = parseReqUrl(req).pathname;
+function createRequestHandler(jobsRoot) {
+  return async (req, res) => {
+    const method = req.method || 'GET';
+    const pathname = parseReqUrl(req).pathname;
 
-  let trackedTaskId = null;
-  const taskIdHeader = req.headers['x-task-id'];
-  if (isValidTaskId(taskIdHeader)) trackedTaskId = taskIdHeader;
+    let trackedTaskId = null;
+    const taskIdHeader = req.headers['x-task-id'];
+    if (isValidTaskId(taskIdHeader)) trackedTaskId = taskIdHeader;
 
-  req.on('close', () => {
-    if (trackedTaskId && method === 'GET' && pathname.startsWith('/api/progress/')) {
-      closeProgressStream(trackedTaskId, res);
+    req.on('close', () => {
+      if (trackedTaskId && method === 'GET' && pathname.startsWith('/api/progress/')) {
+        closeProgressStream(trackedTaskId, res);
+      }
+    });
+
+    try {
+      if (method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
+        serveIndex(res);
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/config') {
+        sendJson(res, 200, {
+          PORT: CONFIG.PORT,
+          PREVIEW_CHARS: CONFIG.PREVIEW_CHARS,
+          CHUNK_SIZE_BYTES: CONFIG.CHUNK_SIZE_BYTES,
+          DOWNLOAD_BATCH_SIZE: CONFIG.DOWNLOAD_BATCH_SIZE,
+          MAX_UPLOAD_BYTES: CONFIG.MAX_UPLOAD_BYTES,
+          MAX_WORKERS: CONFIG.MAX_WORKERS,
+        });
+        return;
+      }
+
+      if (method === 'GET' && pathname.startsWith('/api/progress/')) {
+        const m = pathname.match(/^\/api\/progress\/([^/]+)$/);
+        const taskId = m ? decodeURIComponent(m[1]) : null;
+        trackedTaskId = taskId;
+        openProgressStream(taskId, res);
+        return;
+      }
+
+      if (method === 'GET' && pathname.startsWith('/api/download/')) {
+        handleDownload(res, pathname, jobsRoot);
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/encode-text') {
+        await handleEncodeText(req, res, jobsRoot);
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/encode-file') {
+        await handleEncodeFile(req, res, jobsRoot);
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/decode-image') {
+        await handleDecodeImage(req, res);
+        return;
+      }
+
+      sendJson(res, 404, { error: 'Not Found' });
+    } catch (err) {
+      if (trackedTaskId) {
+        writeProgress(trackedTaskId, { stage: 'error', message: err.message || '服务器错误' });
+      }
+      if (err && err.message === 'PAYLOAD_TOO_LARGE') {
+        sendJson(res, 413, { error: '请求体过大，超过 MAX_UPLOAD_BYTES' });
+        return;
+      }
+      sendJson(res, 500, { error: '服务器错误', detail: err.message });
     }
-  });
-
-  try {
-    if (method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
-      serveIndex(res);
-      return;
-    }
-
-    if (method === 'GET' && pathname === '/api/config') {
-      sendJson(res, 200, {
-        PORT: CONFIG.PORT,
-        PREVIEW_CHARS: CONFIG.PREVIEW_CHARS,
-        CHUNK_SIZE_BYTES: CONFIG.CHUNK_SIZE_BYTES,
-        DOWNLOAD_BATCH_SIZE: CONFIG.DOWNLOAD_BATCH_SIZE,
-        MAX_UPLOAD_BYTES: CONFIG.MAX_UPLOAD_BYTES,
-        MAX_WORKERS: CONFIG.MAX_WORKERS,
-      });
-      return;
-    }
-
-    if (method === 'GET' && pathname.startsWith('/api/progress/')) {
-      const m = pathname.match(/^\/api\/progress\/([^/]+)$/);
-      const taskId = m ? decodeURIComponent(m[1]) : null;
-      trackedTaskId = taskId;
-      openProgressStream(taskId, res);
-      return;
-    }
-
-    if (method === 'GET' && pathname.startsWith('/api/download/')) {
-      handleDownload(res, pathname);
-      return;
-    }
-
-    if (method === 'POST' && pathname === '/api/encode-text') {
-      await handleEncodeText(req, res);
-      return;
-    }
-
-    if (method === 'POST' && pathname === '/api/encode-file') {
-      await handleEncodeFile(req, res);
-      return;
-    }
-
-    if (method === 'POST' && pathname === '/api/decode-image') {
-      await handleDecodeImage(req, res);
-      return;
-    }
-
-    sendJson(res, 404, { error: 'Not Found' });
-  } catch (err) {
-    if (trackedTaskId) {
-      writeProgress(trackedTaskId, { stage: 'error', message: err.message || '服务器错误' });
-    }
-    if (err && err.message === 'PAYLOAD_TOO_LARGE') {
-      sendJson(res, 413, { error: '请求体过大，超过 MAX_UPLOAD_BYTES' });
-      return;
-    }
-    sendJson(res, 500, { error: '服务器错误', detail: err.message });
-  }
-});
-
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error('\n端口 ' + CONFIG.PORT + ' 已被占用，请关闭占用该端口的程序后重试\n');
-  } else {
-    console.error('服务器启动失败：', err.message);
-  }
-  process.exit(1);
-});
-
-server.listen(CONFIG.PORT, '127.0.0.1', () => {
-  const url = 'http://localhost:' + CONFIG.PORT;
-  console.log('');
-  console.log('  ┌────────────────────────────────────┐');
-  console.log('  │        图片转换服务已启动          │');
-  console.log('  │  地址：' + url + '       │');
-  console.log('  │  按 Ctrl+C 可停止服务              │');
-  console.log('  └────────────────────────────────────┘');
-  console.log('');
-
-  const cmds = {
-    win32: `start "" "${url}"`,
-    darwin: `open "${url}"`,
-    linux: `xdg-open "${url}"`,
   };
-  const cmd = cmds[process.platform] || cmds.linux;
-  exec(cmd, (err) => {
-    if (err) console.log('请手动在浏览器中打开：' + url);
+}
+
+function startServer(options = {}) {
+  const openBrowser = Boolean(options.openBrowser);
+  const jobsRoot = options.jobsRoot || DEFAULT_JOBS_ROOT;
+
+  fs.mkdirSync(jobsRoot, { recursive: true });
+
+  const server = http.createServer(createRequestHandler(jobsRoot));
+
+  return new Promise((resolve, reject) => {
+    server.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error('\n端口 ' + CONFIG.PORT + ' 已被占用，请关闭占用该端口的程序后重试\n');
+      } else {
+        console.error('服务器启动失败：', err.message);
+      }
+      reject(err);
+    });
+
+    server.listen(CONFIG.PORT, '127.0.0.1', () => {
+      const url = 'http://localhost:' + CONFIG.PORT;
+      console.log('');
+      console.log('  ┌────────────────────────────────────┐');
+      console.log('  │        图片转换服务已启动          │');
+      console.log('  │  地址：' + url + '       │');
+      console.log('  │  按 Ctrl+C 可停止服务              │');
+      console.log('  └────────────────────────────────────┘');
+      console.log('');
+
+      if (openBrowser) {
+        openUrlInBrowser(url);
+      }
+
+      resolve({ server, url });
+    });
   });
-});
+}
+
+if (require.main === module) {
+  startServer({ openBrowser: true }).catch(() => process.exit(1));
+}
+
+module.exports = { startServer };

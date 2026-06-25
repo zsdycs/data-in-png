@@ -1,0 +1,54 @@
+{
+  "name": "data-in-png",
+  "version": "1.0.0",
+  "description": "将文本和文件编码进 PNG 图片的 Electron 桌面应用",
+  "main": "main.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "server": "node src/server.js",
+    "client:dev": "electron .",
+    "build-client": "npm run build-client:win-x64",
+    "build-client:win-x64": "electron-builder --win portable --x64 --publish never",
+    "build-client:linux-x64": "electron-builder --linux AppImage --x64 --publish never",
+    "build-client:linux-arm64": "electron-builder --linux AppImage --arm64 --publish never",
+    "dist": "electron-builder",
+    "pack": "electron-builder --dir"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^31.6.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.zsdycs.data-in-png",
+    "productName": "data-in-png",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "src/**/*",
+      "src/assets/icon.ico",
+      "src/assets/icon.png",
+      "package.json"
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "nsis": {
+      "useZip": true
+    },
+    "win": {
+      "icon": "src/assets/icon.ico",
+      "target": [
+        "portable"
+      ]
+    },
+    "linux": {
+      "icon": "src/assets/icon.png",
+      "target": [
+        "AppImage"
+      ]
+    }
+  }
+}

@@ -1,5 +1,9 @@
 
 @echo off
 cd /d "%~dp0"
-node ./src/server.js
+if exist package.json (
+	npm start
+) else (
+	node ./src/server.js
+)
 pause
