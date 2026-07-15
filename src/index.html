@@ -287,6 +287,10 @@ function safeFileName(name) {
   return cleaned || 'file';
 }
 
+function formatBytesAsMb(bytes) {
+  return (Number(bytes) / 1024 / 1024).toFixed(0);
+}
+
 function utf8ToBase64(str) {
   const bytes = new TextEncoder().encode(String(str || ''));
   let bin = '';
@@ -319,7 +323,11 @@ function postArrayBufferWithUploadProgress(url, headers, body, onUploadProgress)
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(data);
       } else {
-        reject(new Error((data && (data.detail || data.error)) || ('HTTP ' + xhr.status)));
+        const errMsg = (data && (data.detail || data.error)) || ('HTTP ' + xhr.status);
+        const err = new Error(errMsg);
+        err.code = data && data.code;
+        err.maxBytes = data && data.maxBytes;
+        reject(err);
       }
     };
 
@@ -331,9 +339,12 @@ function triggerDownload(url, fileName) {
   const a = document.createElement('a');
   a.href = url;
   a.download = fileName;
+  a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
+  setTimeout(() => {
+    if (a.parentNode) a.parentNode.removeChild(a);
+  }, 200);
 }
 
 function triggerBlobDownload(blob, fileName) {
@@ -363,17 +374,21 @@ async function downloadFilesInBatches(files, batchSize) {
   const rawBatchSize = Number(batchSize);
   const noThrottle = rawBatchSize === 0;
   const size = noThrottle ? Math.max(1, files.length) : Math.max(1, Math.floor(rawBatchSize) || 1);
+  const itemDelay = noThrottle ? 80 : 120;
+  const batchDelay = noThrottle ? 80 : 320;
   let done = 0;
   const total = files.length || 1;
   for (let i = 0; i < files.length; i += size) {
     const group = files.slice(i, i + size);
-    for (const f of group) {
+    for (let j = 0; j < group.length; j++) {
+      const f = group[j];
       triggerDownload(f.url, f.name);
       done += 1;
       setStageProgress('download', (done / total) * 100, `${done}/${total}`);
-      if (!noThrottle) await delay(120);
+      const needItemDelay = group.length > 1 || !noThrottle;
+      if (needItemDelay && j < group.length - 1) await delay(itemDelay);
     }
-    if (!noThrottle && i + size < files.length) await delay(320);
+    if (i + size < files.length) await delay(batchDelay);
   }
 }
 
@@ -472,6 +487,13 @@ fileB64Inp.addEventListener('change', async () => {
     resetProgress();
 
     const fileName = safeFileName(file.name || 'file.bin');
+
+    if (file.size > APP_CONFIG.MAX_UPLOAD_BYTES) {
+      showMsg(`上传文件不能大于 ${formatBytesAsMb(APP_CONFIG.MAX_UPLOAD_BYTES)} MB`, 'error');
+      fileB64Inp.value = '';
+      return;
+    }
+
     const fileNameB64 = utf8ToBase64(fileName);
     const taskId = createTaskId();
     const mime = file.type || 'application/octet-stream';
@@ -532,7 +554,10 @@ fileB64Inp.addEventListener('change', async () => {
       'success'
     );
   } catch (err) {
-    showMsg('生成失败：' + err.message, 'error');
+    const msg = err && err.code === 'PAYLOAD_TOO_LARGE'
+      ? `上传文件不能大于 ${formatBytesAsMb(err.maxBytes || APP_CONFIG.MAX_UPLOAD_BYTES)} MB`
+      : '生成失败：' + err.message;
+    showMsg(msg, 'error');
   } finally {
     if (progressSse) progressSse.close();
     setTimeout(() => setProgressVisible(false), 1000);

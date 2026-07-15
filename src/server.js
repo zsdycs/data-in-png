@@ -493,7 +493,11 @@ function createRequestHandler(jobsRoot) {
         writeProgress(trackedTaskId, { stage: 'error', message: err.message || '服务器错误' });
       }
       if (err && err.message === 'PAYLOAD_TOO_LARGE') {
-        sendJson(res, 413, { error: '请求体过大，超过 MAX_UPLOAD_BYTES' });
+        sendJson(res, 413, {
+          error: '请求体过大',
+          code: 'PAYLOAD_TOO_LARGE',
+          maxBytes: CONFIG.MAX_UPLOAD_BYTES,
+        });
         return;
       }
       sendJson(res, 500, { error: '服务器错误', detail: err.message });

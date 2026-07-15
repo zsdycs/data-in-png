@@ -27,16 +27,23 @@ function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
+    let overflow = false;
     req.on('data', (chunk) => {
       total += chunk.length;
       if (total > maxBytes) {
-        reject(new Error('PAYLOAD_TOO_LARGE'));
-        req.destroy();
+        overflow = true;
+        // 不再累积数据，也不销毁请求，以便服务端仍能返回 413 响应。
         return;
       }
-      chunks.push(chunk);
+      if (!overflow) chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('end', () => {
+      if (overflow) {
+        reject(new Error('PAYLOAD_TOO_LARGE'));
+        return;
+      }
+      resolve(Buffer.concat(chunks));
+    });
     req.on('error', reject);
   });
 }
