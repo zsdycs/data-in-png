@@ -94,6 +94,7 @@
       padding: 10px 14px;
       border-radius: 8px;
       font-size: 13px; line-height: 1.55;
+      white-space: pre-line;
     }
     #msg.success { display:block; background:var(--s-bg); color:var(--s-t); }
     #msg.error   { display:block; background:var(--e-bg); color:var(--e-t); }
@@ -371,6 +372,23 @@ async function fetchConfig() {
 }
 
 async function downloadFilesInBatches(files, batchSize) {
+  // Electron 环境下由主进程直接下载到系统默认下载目录，绕过浏览器自动下载数量限制。
+  if (window.electronAPI && typeof window.electronAPI.downloadFiles === 'function') {
+    let unsubscribe = null;
+    try {
+      unsubscribe = window.electronAPI.onDownloadProgress((evt) => {
+        if (!evt || typeof evt.done !== 'number') return;
+        setStageProgress('download', (evt.done / evt.total) * 100, `${evt.done}/${evt.total}`);
+      });
+      const result = await window.electronAPI.downloadFiles(files);
+      if (!result.ok) throw new Error(result.error || '下载失败');
+      return result;
+    } finally {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    }
+  }
+
+  // 浏览器环境回退：使用 <a download> 分批触发。
   const rawBatchSize = Number(batchSize);
   const noThrottle = rawBatchSize === 0;
   const size = noThrottle ? Math.max(1, files.length) : Math.max(1, Math.floor(rawBatchSize) || 1);
@@ -463,11 +481,16 @@ btnGen.addEventListener('click', async () => {
     const files = Array.isArray(data.files) ? data.files : [];
     if (!files.length) throw new Error('服务端未返回可下载文件');
 
-    await downloadFilesInBatches(files, APP_CONFIG.DOWNLOAD_BATCH_SIZE);
-    const dlModeText = APP_CONFIG.DOWNLOAD_BATCH_SIZE === 0
-      ? '已取消下载节流（不分批）'
-      : `已按每批 ${APP_CONFIG.DOWNLOAD_BATCH_SIZE} 张自动下载`;
-    showMsg(`生成成功！共 ${files.length} 张图片，${dlModeText}`, 'success');
+    const dlResult = await downloadFilesInBatches(files, APP_CONFIG.DOWNLOAD_BATCH_SIZE);
+    const dirInfo = dlResult && dlResult.dir
+      ? `\n已保存到文件夹：${dlResult.dir}`
+      : '';
+    const dlModeText = dlResult && dlResult.dir
+      ? ''
+      : (APP_CONFIG.DOWNLOAD_BATCH_SIZE === 0
+        ? '已取消下载节流（不分批）'
+        : `已按每批 ${APP_CONFIG.DOWNLOAD_BATCH_SIZE} 张自动下载`);
+    showMsg(`生成成功！共 ${files.length} 张图片${dirInfo}${dlModeText ? '，' + dlModeText : ''}`, 'success');
   } catch (err) {
     showMsg('生成失败：' + err.message, 'error');
   } finally {
@@ -542,15 +565,20 @@ fileB64Inp.addEventListener('change', async () => {
     const files = Array.isArray(data.files) ? data.files : [];
     if (!files.length) throw new Error('服务端未返回可下载文件');
 
-    await downloadFilesInBatches(files, APP_CONFIG.DOWNLOAD_BATCH_SIZE);
-  setStageProgress('download', 100, '100%');
+    const dlResult = await downloadFilesInBatches(files, APP_CONFIG.DOWNLOAD_BATCH_SIZE);
+    setStageProgress('download', 100, '100%');
 
     const mb = (file.size / 1024 / 1024).toFixed(2);
-    const dlModeText = APP_CONFIG.DOWNLOAD_BATCH_SIZE === 0
-      ? '下载不节流（不分批）'
-      : `下载节流为每批 ${APP_CONFIG.DOWNLOAD_BATCH_SIZE} 张`;
+    const dirInfo = dlResult && dlResult.dir
+      ? `\n已保存到文件夹：${dlResult.dir}`
+      : '';
+    const dlModeText = dlResult && dlResult.dir
+      ? ''
+      : (APP_CONFIG.DOWNLOAD_BATCH_SIZE === 0
+        ? '下载不节流（不分批）'
+        : `下载节流为每批 ${APP_CONFIG.DOWNLOAD_BATCH_SIZE} 张`);
     showMsg(
-      `文件「${fileName}」（${mb} MB）已成功转换为 ${files.length} 张图片并下载，${dlModeText}`,
+      `文件「${fileName}」（${mb} MB）已成功转换为 ${files.length} 张图片并下载${dirInfo}${dlModeText ? '，' + dlModeText : ''}`,
       'success'
     );
   } catch (err) {
@@ -708,11 +736,20 @@ fileInp.addEventListener('change', async () => {
 
 fetchConfig()
   .then(() => {
+    const chunkSizeMb = (APP_CONFIG.CHUNK_SIZE_BYTES / 1024 / 1024).toFixed(0);
+    const maxUploadMb = (APP_CONFIG.MAX_UPLOAD_BYTES / 1024 / 1024).toFixed(0);
+    const workersText = APP_CONFIG.MAX_WORKERS > 0
+      ? `${APP_CONFIG.MAX_WORKERS} 个`
+      : '自动';
     const dlModeText = APP_CONFIG.DOWNLOAD_BATCH_SIZE === 0
-      ? ''
-      : `下载节流每批 ${APP_CONFIG.DOWNLOAD_BATCH_SIZE} 张`;
+      ? '不节流'
+      : `每批 ${APP_CONFIG.DOWNLOAD_BATCH_SIZE} 张`;
     showMsg(
-      `配置已加载：分片阈值 ${(APP_CONFIG.CHUNK_SIZE_BYTES / 1024 / 1024).toFixed(0)} MB，${dlModeText}`,
+      `配置已加载：\n` +
+      `分片阈值：${chunkSizeMb} MB\n` +
+      `下载节流：${dlModeText}\n` +
+      `最大上传：${maxUploadMb} MB\n` +
+      `并行线程：${workersText}\n`,
       'info'
     );
   })

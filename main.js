@@ -1,7 +1,9 @@
 'use strict';
 
+const fs = require('fs');
+const http = require('http');
 const path = require('path');
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const { startServer } = require('./src/server');
 
 const WINDOW_WIDTH = 640;
@@ -90,6 +92,7 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      preload: path.join(__dirname, 'src', 'preload.js'),
     },
   });
 
@@ -98,12 +101,89 @@ function createMainWindow() {
     mainWindow = null;
   });
 
+  win.webContents.on('will-download', (event, item) => {
+    const savePath = uniqueSavePath(app.getPath('downloads'), item.getFilename());
+    item.setSavePath(savePath);
+  });
+
   return win;
+}
+
+function safeFileName(name) {
+  const src = String(name || '').trim();
+  const cleaned = src.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/\s+/g, ' ').trim();
+  return cleaned || 'file';
+}
+
+function uniqueSavePath(dir, name) {
+  const base = safeFileName(name);
+  let candidate = path.join(dir, base);
+  if (!fs.existsSync(candidate)) return candidate;
+
+  const ext = path.extname(base);
+  const stem = path.basename(base, ext);
+  let index = 1;
+  do {
+    candidate = path.join(dir, `${stem} (${index})${ext}`);
+    index += 1;
+  } while (fs.existsSync(candidate));
+  return candidate;
+}
+
+function downloadToFile(url, savePath) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(savePath);
+    http.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`HTTP ${res.statusCode}`));
+        return;
+      }
+      res.pipe(file);
+      file.on('finish', () => file.close((err) => (err ? reject(err) : resolve(savePath))));
+    }).on('error', reject);
+    file.on('error', reject);
+  });
+}
+
+async function downloadFilesViaMain(files) {
+  if (!serverUrl) throw new Error('服务尚未启动');
+  const downloadDir = app.getPath('downloads');
+  const saved = [];
+  const total = files.length;
+
+  for (let i = 0; i < total; i++) {
+    const f = files[i];
+    const url = new URL(f.url, serverUrl).toString();
+    const savePath = uniqueSavePath(downloadDir, f.name);
+    await downloadToFile(url, savePath);
+    saved.push(savePath);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('download-progress', {
+        done: i + 1,
+        total,
+        file: f.name,
+      });
+    }
+  }
+
+  return saved;
+}
+
+function registerIpcHandlers() {
+  ipcMain.handle('download-files', async (_event, files) => {
+    try {
+      const saved = await downloadFilesViaMain(files);
+      return { ok: true, saved, dir: app.getPath('downloads') };
+    } catch (err) {
+      return { ok: false, error: err && err.message ? err.message : String(err) };
+    }
+  });
 }
 
 async function bootstrap() {
   mainWindow = createMainWindow();
   mainWindow.loadURL(loadingPageHtml('正在启动服务…'));
+  registerIpcHandlers();
 
   try {
     const jobsRoot = path.join(app.getPath('userData'), 'jobs');
